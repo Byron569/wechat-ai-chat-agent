@@ -1,0 +1,17 @@
+# 核心
+requests>=2.31
+openai>=1.30
+fastapi>=0.110
+uvicorn>=0.29
+python-dotenv>=1.0
+pyyaml>=6.0
+
+# 仅 macOS 值守端（OCR 读微信消息）需要：
+# macOS 原生 Vision OCR（vn 字符识别）+ Quartz 截图 + Pillow dHash
+pyobjc-core>=12
+pyobjc-framework-Cocoa>=12
+pyobjc-framework-Quartz>=12
+pyobjc-framework-Vision>=12
+pyobjc-framework-CoreText>=12
+pillow>=10.0
+PyJWT>=2.8

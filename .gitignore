@@ -1,0 +1,21 @@
+# 密钥
+.env
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# 运行时 / 配置产物
+*.lock
+wechat_replies.log      # 值守收发日志（含真实聊天记录，勿提交）
+wechat_ax_dump.txt      # 调试用的辅助功能树导出
+
+# 聊天语料与记忆（个人数据，勿入库）
+data/
+!data/.gitkeep
+
+# macOS
+.DS_Store
