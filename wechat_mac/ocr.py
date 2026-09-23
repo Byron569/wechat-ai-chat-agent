@@ -39,27 +39,19 @@ def have_screen_capture() -> bool:
 
 
 def wechat_frontmost() -> bool:
-    """微信主窗口是否在所有 on-screen 窗口最顶层。
+    """微信是否在当前前台应用（读屏只在微信最前时进行，防错读其它窗口）。
 
-    截屏是"屏幕坐标区域"截图：微信被其它窗口遮挡/切到别的 App 时，
-    截到的是顶层窗口内容，会把浏览器/翻译页/网页当微信消息读进来（历史错发实锤）。
-    判定失败时返回 True（不拦截，保持原行为），避免失效侵入主循环。
+    用系统 API NSWorkspace.frontmostApplication 判定（CGWindowList 的返回顺序
+    在不同 macOS 上不可靠，会把前台微信误判成"被遮挡"）。
+    AppKit 不可用时返回 True 放行（不拦截，保证值守能跑）。
     """
     try:
-        infos = Quartz.CGWindowListCopyWindowInfo(
-            Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGNullWindowID)
-        for info in infos or []:   # CGWindowList 返回顺序：顶层在前
-            owner = info.get(Quartz.kCGWindowOwnerName, "") or ""
-            if not owner or owner == "Window Server":
-                continue
-            b = info.get(Quartz.kCGWindowBounds) or {}
-            w, h = float(b.get("Width", 0)), float(b.get("Height", 0))
-            if w < 200 or h < 200:   # 跳过菜单栏/角标/小浮窗
-                continue
-            return owner in ("微信", "WeChat")
-        return True
+        from AppKit import NSWorkspace
+        name = str(NSWorkspace.sharedWorkspace()
+                   .frontmostApplication().localizedName() or "")
+        return name in ("微信", "WeChat")
     except Exception:
-        return True
+        return True   # 判不了就放行，避免误伤正常值守
 
 
 def _region_shot(x: int, y: int, w: int, h: int, path: str) -> bool:
