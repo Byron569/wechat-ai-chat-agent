@@ -29,7 +29,7 @@ class LLMClient:
                  model: str = "mimo-v2.5-pro", temperature: float = 0.7,
                  max_tokens: int = 200, enable_thinking: bool | None = None,
                  presence_penalty: float = 0.0, frequency_penalty: float = 0.0,
-                 provider: str = "mimo"):
+                 provider: str = "mimo", effort: str | None = None):
         if provider == "ollama":
             ollama_base = _first_env("OLLAMA_BASE") or "http://127.0.0.1:11434"
             base_url = base_url or f"{ollama_base.rstrip('/')}/v1"
@@ -44,6 +44,7 @@ class LLMClient:
         self.enable_thinking = enable_thinking
         self.presence_penalty = presence_penalty
         self.frequency_penalty = frequency_penalty
+        self.effort = effort or ""     # DeepSeek V4 推理档位：low/high/max
         # httpx 会自动读取环境里的 HTTPS_PROXY
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
@@ -64,7 +65,10 @@ class LLMClient:
             kwargs["frequency_penalty"] = self.frequency_penalty
         # MiMo 的思考模式开关不是 OpenAI 标准参数，走 extra_body；仅对 mimo 模型生效
         if self.enable_thinking is not None and "mimo" in self.model.lower():
-            kwargs["extra_body"] = {"enable_thinking": self.enable_thinking}
+            kwargs.setdefault("extra_body", {})["enable_thinking"] = self.enable_thinking
+        # DeepSeek V4 的推理档位（low/high/max），走 extra_body；仅对 deepseek 模型生效
+        if self.effort and "deepseek" in self.model.lower():
+            kwargs.setdefault("extra_body", {})["effort"] = self.effort
 
         resp = self.client.chat.completions.create(**kwargs)
         return (resp.choices[0].message.content or "").strip()

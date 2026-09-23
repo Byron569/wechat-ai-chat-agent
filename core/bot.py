@@ -105,6 +105,7 @@ class WeChatBot:
             enable_thinking=llm_cfg.get("enable_thinking"),
             presence_penalty=llm_cfg.get("presence_penalty", 0.0),
             frequency_penalty=llm_cfg.get("frequency_penalty", 0.0),
+            effort=llm_cfg.get("effort"),
         )
         self.rules = KeywordRules(config.get("rules", {}))
         self.risk = RiskControl(config.get("risk", {}))

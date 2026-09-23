@@ -31,16 +31,16 @@ jev:
   urgency_human: 4            # 紧急程度达到第几档（1~5）→ 转人工话术
 
 # ========== LLM 生成参数 ==========
-# provider: mimo=小米MiMo(云端付费，默认思考) | ollama=本机/手机部署的模型，走 .env 的 OLLAMA_BASE(默认 127.0.0.1:11434)
+# provider: mimo=小米MiMo(云端) | deepseek=DeepSeek(官方 API，.env 里 LLM_API_KEY/LLM_BASE_URL) | ollama=本机/手机(OLLAMA_BASE)
 llm:
-  provider: mimo               # 当前用小米 MiMo 云端；换手机 blossom 就改: ollama
-  model: mimo-v2.6-flash       # 2.6 flash；其它可选：mimo-v2.5-pro / mimo-v2.6-pro / mimo-v2.5
+  provider: deepseek             # 当前用 DeepSeek-V4.1-Flash；换小米改 mimo，换本地模型改 ollama
+  model: deepseek-flash          # DeepSeek-V4.1-Flash；其它可选：deepseek-v4-pro
+  effort: max                    # DeepSeek V4 推理档位 low/high/max（max=推理最高；mimo/ollama 忽略）
   temperature: 0.85         # 调高让回复更多样，不会三句一个模板味
   presence_penalty: 0.8     # 内容重复惩罚，减少 AI 套话
   frequency_penalty: 0.5    # 词频惩罚，减少复读
-  # flash/pro 模型每次自带约 200 token 思考，max_tokens 太小会导致回复为空，建议 >=512
-  max_tokens: 512
-  enable_thinking: true     # true=默认思考强度；false=关闭深度思考
+  max_tokens: 512           # 回复最大输出；deepseek-flash 上限更大，此处按人设短句够用
+  enable_thinking: true     # 仅 mimo 生效（通过 extra_body 传入）；deepseek/ollama 忽略
 
 # ========== 硬规则（优先级高于 JEV，本地判断） ==========
 rules:
