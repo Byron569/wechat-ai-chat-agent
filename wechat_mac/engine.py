@@ -377,6 +377,13 @@ def watch_loop(bot, interval: float = 1.0, stop: threading.Event | None = None,
                         _reset(name, msges)
                     except Exception as e:
                         _log(f"重置会话上下文失败（{name}）：{e}")
+                # 切框 = 临时提示词失效（它是"当前会话"的临时设定，不跨会话）
+                _clear = getattr(bot, "clear_temp_prompt", None)
+                if _clear:
+                    try:
+                        _clear()
+                    except Exception:
+                        pass
                 # 打开对话自动补回：最后一条是对方(左侧) → 直接回（白名单/黑名单过滤）
                 if catchup_enabled and _chat_allowed(name, catchup_whitelist, catchup_blacklist):
                     catch_text = _catchup_target(msges)

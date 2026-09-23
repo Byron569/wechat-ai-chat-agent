@@ -143,6 +143,9 @@ class WeChatBot:
         # 生成回复时只取最近 N 条进 prompt（防旧话题漂移）；切框是否用当前屏重建上下文
         self._ctx_size = max(int(session_cfg.get("context_size", 6) or 6), 2)
         self._reset_on_switch = bool(session_cfg.get("reset_on_switch", True))
+        # 当前会话的临时提示词（对方身份/话题；仅内存，切框即失效）
+        self._temp_prompt = ""
+        self._temp_prompt_for: str | None = None
         # 预热 JEV 阈值
         self.jev_thresholds = {
             "should_reply_min": jev_cfg.get("should_reply_min", 0.35),
@@ -202,6 +205,24 @@ class WeChatBot:
         return memory
 
     # ---------- 对外主入口 ----------
+    def set_temp_prompt(self, nickname: str, text: str) -> None:
+        """设置【当前会话】的临时提示词（对方身份/当前话题），仅内存、不落盘。
+
+        切换会话（clear_temp_prompt）或重启后即失效——目的是短期的"当前对话
+        背景设定"，让生成的回复更贴合对方身份与话题。
+        """
+        self._temp_prompt_for = nickname
+        self._temp_prompt = (text or "").strip()
+
+    def clear_temp_prompt(self) -> None:
+        """切换到其它对话框时清空临时提示词（临时性）。"""
+        self._temp_prompt = ""
+        self._temp_prompt_for = None
+
+    def temp_prompt(self) -> tuple[str | None, str]:
+        """返回 (绑定的会话名, 提示词文本)（面板显示用）。"""
+        return self._temp_prompt_for, self._temp_prompt
+
     def reset_chat(self, nickname: str, msges: list) -> None:
         """切框时用当前屏幕消息重建该会话上下文（防旧话题漂移，翻旧账）。
 
@@ -433,6 +454,9 @@ class WeChatBot:
         system = self.cfg.get("persona", "").strip()
         if getattr(self.llm, "provider", "mimo") == "ollama":
             system += SMALL_MODEL_HINT
+        # 当前会话临时提示词（对方身份/当前话题）注入人设层，让回复更贴合
+        if self._temp_prompt and nickname == self._temp_prompt_for:
+            system += f"\n\n【本次对话临时背景（对方是谁/在聊什么，回复必须贴合）】\n{self._temp_prompt}\n"
         examples = self.memory.format_examples(text) if self.memory else ""
 
         # 注入最近对话上下文：优先用会话记忆（带"对方/我"标记，跨轮次不丢上文），
@@ -477,6 +501,9 @@ class WeChatBot:
         system = self.cfg.get("persona", "").strip()
         if getattr(self.llm, "provider", "mimo") == "ollama":
             system += SMALL_MODEL_HINT
+        # 保活话术同样贴合当前会话的临时背景（若有）
+        if self._temp_prompt and nickname == self._temp_prompt_for:
+            system += f"\n\n【本次对话临时背景（对方是谁/在聊什么，话术必须贴合）】\n{self._temp_prompt}\n"
         # 优先用会话记忆拼最近对话，没有则退回调用方传入的 context
         ctx = "（没有历史消息）"
         if self.session:

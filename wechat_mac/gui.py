@@ -43,13 +43,15 @@ class FloatPanel:
         self.root.attributes("-topmost", True)
         self.root.resizable(False, False)
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        self.root.geometry(f"380x360+{sw - 408}+{sh - 410}")
+        self.root.geometry(f"380x402+{sw - 408}+{sh - 452}")
         self.root.protocol("WM_DELETE_WINDOW", self._quit)
 
         self._q: queue.Queue = queue.Queue()
         self._watch_active = False
         self._stop: threading.Event | None = None
         self._thread: threading.Thread | None = None
+        self._bot = None           # 当前托管实例（应用/清除临时提示词用）
+        self._cur_name = "当前会话"  # 当前值守会话名（随心跳/切换事件更新）
         self._last_err = ""
         self._last_event = ""
         self._last_mode: str | None = None
@@ -88,7 +90,24 @@ class FloatPanel:
         self.chat_lbl.pack(fill="x", padx=10, pady=(0, 2))
         self.badge_lbl = tk.Label(self.root, text="", fg="#999", anchor="w",
                                   font=("Arial", 9))
-        self.badge_lbl.pack(fill="x", padx=10, pady=(0, 4))
+        self.badge_lbl.pack(fill="x", padx=10, pady=(0, 2))
+
+        # 临时提示词行：输入对方身份/当前话题 → 应用（仅当前会话生效，切框即失效）
+        p_row = tk.Frame(self.root)
+        p_row.pack(fill="x", padx=10, pady=(0, 2))
+        tk.Label(p_row, text="临时提示词:", font=("Arial", 9)).pack(side="left")
+        self.prompt_entry = tk.Entry(p_row, width=24, font=("Arial", 9))
+        self.prompt_entry.pack(side="left", padx=(4, 4), fill="x", expand=True)
+        tk.Button(p_row, text="应用", command=self._apply_prompt,
+                  font=("Arial", 9)).pack(side="left")
+        tk.Button(p_row, text="清除", command=self._clear_prompt,
+                  font=("Arial", 9)).pack(side="left", padx=(3, 0))
+        self.prompt_entry.bind("<Return>", lambda _e: self._apply_prompt())
+        self.prompt_lbl = tk.Label(
+            self.root,
+            text="（未设置：输入对方身份/话题后点【应用】，仅当前会话生效，切框即失效）",
+            fg="#999", anchor="w", font=("Arial", 9), wraplength=360, justify="left")
+        self.prompt_lbl.pack(fill="x", padx=10, pady=(0, 4))
 
         self.log = scrolledtext.ScrolledText(self.root, height=8, width=48,
                                              fg=LOG_COLOR, font=("Menlo", 9),
@@ -139,6 +158,46 @@ class FloatPanel:
         except Exception:
             pass
 
+    # ---------- 临时提示词 ----------
+    def _apply_prompt(self):
+        text = self.prompt_entry.get().strip()
+        if not text:
+            self._append_log("[提示词] 输入为空，未应用", "status")
+            return
+        if self._bot is None:
+            self._append_log("[提示词] 请先开启托管再设置", "status")
+            return
+        try:
+            self._bot.set_temp_prompt(self._cur_name, text)
+            self._append_log(f"[提示词] 已设置「{self._cur_name}」：{text[:30]}", "status")
+            self._refresh_prompt_lbl()
+        except Exception as e:
+            self._append_log(f"[提示词] 设置失败：{e}", "status")
+
+    def _clear_prompt(self):
+        if self._bot is not None:
+            try:
+                self._bot.clear_temp_prompt()
+            except Exception:
+                pass
+        self._append_log("[提示词] 已清除", "status")
+        self._refresh_prompt_lbl()
+
+    def _refresh_prompt_lbl(self):
+        try:
+            if self._bot is None:
+                self.prompt_lbl.config(text="（未托管）", fg="#999")
+                return
+            name, text = self._bot.temp_prompt()
+            if text:
+                self.prompt_lbl.config(text=f"生效中「{name}」：{text[:40]}", fg="#7cb342")
+            else:
+                self.prompt_lbl.config(
+                    text="（未设置：输入对方身份/话题后点【应用】，仅当前会话生效，切框即失效）",
+                    fg="#999")
+        except Exception:
+            pass
+
     def _set_dot(self, mode: str):
         if mode != self._last_mode:
             self._last_mode = mode
@@ -180,6 +239,7 @@ class FloatPanel:
                         self._set_dot("on" if self._watch_active else "off")
                 elif tag == "hb":
                     self.hb_lbl.config(text=item[1])
+                    self._cur_name = item[2]
                     self.chat_lbl.config(text=f"当前会话：{item[2]}")
                     self._update_badge(item[2])
                 elif tag == "dot":
@@ -204,10 +264,12 @@ class FloatPanel:
             self._stop.set()
             self._thread.join(timeout=3)
             self._watch_active = False
+            self._bot = None
             self.status_lbl.config(text="未托管")
             self.btn.config(text="开启托管")
             self._set_dot("off")
             self._append_log("[停止托管]")
+            self._refresh_prompt_lbl()
             return
 
         from core.bot import WeChatBot
@@ -215,6 +277,7 @@ class FloatPanel:
 
         self._stop = threading.Event()
         bot = WeChatBot(load_config())
+        self._bot = bot
         self._watch_active = True
         self._thread = threading.Thread(
             target=watch_loop,
@@ -229,11 +292,18 @@ class FloatPanel:
         self._append_log("[托管已开启：跟随当前聊天框]")
 
     def _on_status(self, text: str):
+        # 跟踪当前会话名（切框时 engine 推「已切换 → X」/「打开对话补回（X）」）
+        if text.startswith("已切换 → "):
+            n = text.split("→", 1)[1].strip()
+            if n:
+                self._cur_name = n
         self._q.put(("status", text))       # 顶部状态栏
         self._q.put(("log", text, "status"))  # 日志区（错误词自动转红）
 
     def _on_event(self, name, msg, reply):
         t = time.strftime("%H:%M:%S")
+        if name:
+            self._cur_name = name
         self._q.put(("log", f"[{t}] {name} 收到：{msg}", "event"))
         self._q.put(("log", f"[{t}]     回复：{reply}", "event"))
 
