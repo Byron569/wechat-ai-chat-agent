@@ -27,10 +27,13 @@ class WeChatBridge:
         return ocr.layout(self._win)
 
     # ---------- 认知（纯 OCR） ----------
-    def scan(self, win: tuple | None = None) -> dict:
-        """一次纯 OCR 全扫描：name（会话名）/ bubble（最新气泡）/ hash / msges。"""
+    def scan(self, win: tuple | None = None, scale: float = 1.0) -> dict:
+        """一次纯 OCR 全扫描：name（会话名）/ bubble（最新气泡）/ hash / msges。
+
+        scale：消息区放大倍数（>1 提升小字识别，透传给 ocr.scan）。
+        """
         w = win or self._win
-        s = ocr.scan(w)
+        s = ocr.scan(w, scale=scale)
         if s.get("ok") and s.get("win"):
             self._win = s["win"]        # 窗口可能被拖动，刷新
             if s["layout"]["input"]:

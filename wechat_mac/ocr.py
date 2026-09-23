@@ -253,7 +253,8 @@ def probe_light(wx: tuple[int, int, int, int] | None = None) -> dict:
             "msg": lay["msg"], "ms": int((time.time() - t0) * 1000)}
 
 
-def scan(wx: tuple[int, int, int, int] | None = None) -> dict:
+def scan(wx: tuple[int, int, int, int] | None = None,
+         scale: float = 1.0) -> dict:
     """一次纯 OCR 全扫描：{ok, name, bubble, hash, msges:[(文本,x)] , win, layout}
 
     - win      主窗口 bounds（CGWindowList）
@@ -261,6 +262,7 @@ def scan(wx: tuple[int, int, int, int] | None = None) -> dict:
     - bubble   消息区最后一行文本（≈最新气泡；图片/表情可能为空）
     - hash     消息区 dHash（变化探测）
     - msges    消息区全部文本行（上下文用）
+    - scale    消息区放大倍数（>1 时先放大再 OCR，小字识别更准；归一化 x 不变）
 
     只做 1 次整窗截图 + 1 次整窗 OCR：会话名取首行，消息区文本按
     x 坐标在聊天区左界内过滤（同一张图，不额外 OCR）。
@@ -325,6 +327,15 @@ def scan(wx: tuple[int, int, int, int] | None = None) -> dict:
         int((lay["msg"][0] - wx[0]) * sx), int((lay["msg"][1] - wx[1]) * sy),
         int((lay["msg"][0] - wx[0] + lay["msg"][2]) * sx),
         int((lay["msg"][1] - wx[1] + lay["msg"][3]) * sy)))
+    # 放大消息区再 OCR：小字识别更准、气泡左右位置判定更稳（归一化 x 不受放大影响）
+    try:
+        if float(scale) > 1:
+            wpx, hpx = msg_img.size
+            msg_img = msg_img.resize(
+                (max(int(wpx * float(scale)), 1), max(int(hpx * float(scale)), 1)),
+                Image.LANCZOS)
+    except Exception:
+        pass
     buf = io.BytesIO(); msg_img.save(buf, format="PNG")
     mraw = buf.getvalue()
     mcdata = ctypes.create_string_buffer(mraw, len(mraw))

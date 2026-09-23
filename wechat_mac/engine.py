@@ -22,6 +22,7 @@ import time
 from core.config import ROOT
 from wechat_mac import ax
 from wechat_mac.bridge import WeChatBridge
+from wechat_mac.ledger import ReplyLedger
 
 LOG_PATH = ROOT / "wechat_replies.log"
 
@@ -98,17 +99,50 @@ def _looks_timestamp(t: str) -> bool:
     return bool(re.fullmatch(r"\d{1,2}[:：]\d{2}", t.strip()))
 
 
-SELF_RIGHT_X = 0.55   # 行中心 x > 此值 = 自己(右侧绿色框)
+OTHER_X_MAX = 0.45   # 行中心 x < 此值 = 对方(左侧灰框) → 触发回复
+SELF_X_MIN = 0.55    # 行中心 x > 此值 = 自己(右侧绿框) → 不触发，仅移基线
+# 中间带（0.45~0.55：转账/红包/系统提示等居中消息）→ 忽略不触发
 
 
 def _own_lines(lines: list) -> list:
     """过滤出自己(右侧)的行——这些是 AI 或你自己输入的内容，不触发回复。"""
-    return [t for t, xc in lines if xc > SELF_RIGHT_X]
+    return [t for t, xc in lines if xc > SELF_X_MIN]
 
 
 def _other_lines(lines: list) -> list:
-    """过滤出对方(左侧)的行——这些才是要回复的消息。"""
-    return [t for t, xc in lines if xc < SELF_RIGHT_X]
+    """过滤出对方(左侧)的行——这些才是要回复的消息（居中带不算对方，忽略）。"""
+    return [t for t, xc in lines if xc < OTHER_X_MAX]
+
+
+def _catchup_target(msges: list) -> str | None:
+    """打开对话时，若消息区最后一条非空消息是"对方(左侧)"→ 取它作为补回目标。
+
+    只回最后一条：连发多条时前几条进 SessionMemory 当上下文，不回每一条。
+    最后一条是自己(右侧)/居中(转账红包系统提示)/时间戳 → 返回 None 不补回
+    （最后是自己=轮到自己等对方，不该回旧消息）。
+    """
+    if not msges:
+        return None
+    for t, xc in reversed(msges):
+        t = (t or "").strip()
+        if not t or _looks_timestamp(t):
+            continue            # 跳过时间戳/空行，继续往前看
+        return t if xc < OTHER_X_MAX else None   # 只看最后一条"有内容"消息的归属
+    return None
+
+
+def _chat_allowed(name: str, whitelist: list, blacklist: list) -> bool:
+    """catchup 白名单/黑名单（支持前缀匹配）：
+    黑名单命中 → 否；白名单非空且不命中 → 否；其它 → 是。
+    """
+    def _hit(pat: str) -> bool:
+        p = str(pat).strip()
+        return bool(p and (name == p or name.startswith(p)))
+    if any(_hit(p) for p in (blacklist or [])):
+        return False
+    if (whitelist or []) and not any(_hit(p) for p in whitelist):
+        return False
+    return True
 
 
 def watch_loop(bot, interval: float = 1.0, stop: threading.Event | None = None,
@@ -118,6 +152,25 @@ def watch_loop(bot, interval: float = 1.0, stop: threading.Event | None = None,
     watch_cfg = watch_cfg.get("watch", {})
     fallback_s = float(watch_cfg.get("fallback_interval", 120))
     ping_enabled = bool(watch_cfg.get("ping_enabled", True))
+    # 打开对话自动补回最后一条对方消息（catchup）相关配置
+    catchup_enabled = bool(watch_cfg.get("catchup_enabled", True))
+    catchup_whitelist = list(watch_cfg.get("catchup_whitelist", []) or [])
+    catchup_blacklist = list(watch_cfg.get("catchup_blacklist", []) or [])
+    # 消息区 OCR 放大倍数（>1 提升小字识别与左右位置精度）
+    try:
+        ocr_scale = max(1.0, float(watch_cfg.get("ocr_scale", 1.0) or 1.0))
+    except (TypeError, ValueError):
+        ocr_scale = 1.0
+    # 消息已处理台账（防"同一消息反复判定"）；初始化失败则降级为不去重，不影响值守
+    try:
+        ledger = ReplyLedger(ROOT / "data" / "replied_messages.db")
+    except Exception as e:
+        ledger = None
+        _log(f"台账初始化失败（关闭去重）：{e}")
+    try:
+        dedup_window = float(watch_cfg.get("catchup_dedup_window", 300))
+    except (TypeError, ValueError):
+        dedup_window = 300.0
     # 分条发送间隔（模拟真人 enter 连发，随机到上限）
     _fmt = (getattr(bot, "cfg", {}) or {}).get("format", {})
     _line_swing = float(_fmt.get("line_interval", 0.8))
@@ -141,7 +194,7 @@ def watch_loop(bot, interval: float = 1.0, stop: threading.Event | None = None,
     def _read3_extra(b: WeChatBridge) -> list[str]:
         """兜底专用：本帧没 OCR 到文本时补一次精读拿上下文（仅在补处理/保活要走）。"""
         try:
-            s = b.scan(_win)
+            s = b.scan(_win, scale=ocr_scale)
             if s.get("ok"):
                 return [t for t, _ in (s.get("msges") or [])][-3:]
         except Exception:
@@ -197,6 +250,8 @@ def watch_loop(bot, interval: float = 1.0, stop: threading.Event | None = None,
                 last_sent = sent_first or reply
                 _log(f"{name} 收到：{cand} → 回复：{reply}")
                 _status("→ 已发送回复 ✅")
+                if ledger:
+                    ledger.mark(name, cand, "replied")
                 if on_event:
                     on_event(name, cand, reply)
                 elif on_status:
@@ -205,10 +260,12 @@ def watch_loop(bot, interval: float = 1.0, stop: threading.Event | None = None,
                 _log(f"发送失败[{name}]：{e}")
                 _status(f"→ 发送失败：{e}")
                 if on_status:
-                    on_status(f"发送失败：{e}")
+                    on_status(f"发送失败：{e}")   # 不记账，留给兜底重试
         else:
             _log(f"{name} 判定无需回复：「{cand}」")
             _status("→ 判定无需回复，跳过")
+            if ledger:
+                ledger.mark(name, cand, "skipped")
             if on_status:
                 on_status("（判定无需回复）")
         last_ok = time.time()   # 无论回没回都推进计时，避免兜底刷屏
@@ -250,7 +307,7 @@ def watch_loop(bot, interval: float = 1.0, stop: threading.Event | None = None,
             cycle += 1
             # ---------- ② 画面变了 or 定期校准 → 整窗精读（OCR 一次） ----------
             if changed or cycle % 15 == 14:
-                s = b.scan(_win)
+                s = b.scan(_win, scale=ocr_scale)
                 if not s.get("ok"):
                     _win = None
                     cycle += 1
@@ -273,22 +330,37 @@ def watch_loop(bot, interval: float = 1.0, stop: threading.Event | None = None,
                 last_name, last_signal = name, sig
                 last_sent = None    # 切框清空：防上一窗口自己回复文案与新框撞车
                 last_handled = None
-                last_msges = None   # 切框后重新建基线
+                last_msges = msges or []   # 以本帧为基线（切框轮必有 msges）
                 last_hash = new_hash
                 ping_done = False   # 新窗口允许保活
+                # 打开对话自动补回：最后一条是对方(左侧) → 直接回（白名单/黑名单过滤）
+                if catchup_enabled and _chat_allowed(name, catchup_whitelist, catchup_blacklist):
+                    catch_text = _catchup_target(msges)
+                    if (catch_text and not _same_text(catch_text, last_sent, 0.7)
+                            and not catch_text.startswith("你撤回")):
+                        # 台账：同一会话同文本在窗口内已处理过（含判定不回）→ 跳过不重复判定
+                        if (ledger and ledger.recently(name, catch_text, dedup_window)):
+                            _log(f"打开对话补回跳过（{name}）：该消息窗口内已处理过")
+                        else:
+                            last_signal = catch_text
+                            _log(f"打开对话补回（{name}）：「{catch_text[:30]}」")
+                            if on_status:
+                                on_status(f"→ 打开对话补回（{name}）")
+                            _act(name, catch_text, _read3_from(msges))
                 _log(f"已切换 → {name}（已清空上一窗口状态/记录）")
                 cycle += 1
                 time.sleep(interval)
                 continue
 
-            now = time.time()
-            # 首帧/切框后 last_msges 为空：只建基线，不回复历史
+            # 首帧兜底（正常不走到：切框轮已建基线）；仅当本帧无 msges 又无切框时才建基线
             if last_msges is None:
                 last_msges = msges or last_msges
                 last_signal = last_signal or "\n".join(t for t, _ in (msges or []))
                 cycle += 1
                 time.sleep(interval)
                 continue
+
+            now = time.time()
             # 正常触发：画面变了 → 找出相对上次新增的行，仅"对方(左侧)"触发回复
             new_lines = _diff_bottom(msges, last_msges)
             other_new = _other_lines(new_lines)   # 对方灰框发来的
