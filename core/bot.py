@@ -46,16 +46,6 @@ EMOJI_RE = re.compile(
 # 中文/英文/数字混合长度（用于超长截断判断）
 LENGTH_CAP = 80
 
-# 针对本地小模型（手机的 blossom 4B 等）的额外人设强化：
-# 小模型容易把"发送者/自己"写进回复、复述对方的话、冒客服腔，这里硬性压制
-SMALL_MODEL_HINT = """
-【针对本机小模型的额外铁律（必须遵守）】
-1. 绝对不要复述、照抄对方的话，直接回答对方问的问题。
-2. 回复里禁止出现对方名字、自己的名字、@某人和任何"上下文/发送者/辅助判断"字样。
-3. 禁止客服腔的"随时待命/为您服务/有什么可以帮您/请随时联系我"等表达。
-4. 能一发字绝不十个字，一句讲完不加后缀。
-"""
-
 
 def _remove_markdown(s: str) -> str:
     return MARKDOWN_RE.sub("", s)
@@ -455,8 +445,6 @@ class WeChatBot:
         is_group = bool(msg.get("is_group", False))
 
         system = self.cfg.get("persona", "").strip()
-        if getattr(self.llm, "provider", "mimo") == "ollama":
-            system += SMALL_MODEL_HINT
         # 当前会话临时提示词（对方身份/当前话题）注入人设层，让回复更贴合
         if self._temp_prompt and nickname == self._temp_prompt_for:
             system += f"\n\n【本次对话临时背景（对方是谁/在聊什么，回复必须贴合）】\n{self._temp_prompt}\n"
@@ -503,8 +491,6 @@ class WeChatBot:
     def idle_ping(self, nickname: str, context: list[str] | None = None) -> str | None:
         """保活：根据最近对话，让 AI 生成一句自然的主动话术（不固定文案）。"""
         system = self.cfg.get("persona", "").strip()
-        if getattr(self.llm, "provider", "mimo") == "ollama":
-            system += SMALL_MODEL_HINT
         # 保活话术同样贴合当前会话的临时背景（若有）
         if self._temp_prompt and nickname == self._temp_prompt_for:
             system += f"\n\n【本次对话临时背景（对方是谁/在聊什么，话术必须贴合）】\n{self._temp_prompt}\n"
