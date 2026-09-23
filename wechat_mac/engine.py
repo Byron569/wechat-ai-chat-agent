@@ -184,6 +184,7 @@ def watch_loop(bot, interval: float = 1.0, stop: threading.Event | None = None,
     last_ok = time.time()  # 最后一次成功交互（发送/判定无需回）的时间
     last_ping = 0.0        # 最后一次发保活的时间
     ping_done = False      # 本轮静默期是否已经保活过（防止对空会话反复轰炸）
+    _front_hint = 0.0      # 最近一次"等待微信前台"提示时间（15s 节流）
     _win = None            # 窗口缓存（probe_light/scan 共用，省一次 CGWindow 枚举）
     last_msges = None      # 上次见到的消息区行集（用于提取本次新增的多条）
 
@@ -293,14 +294,24 @@ def watch_loop(bot, interval: float = 1.0, stop: threading.Event | None = None,
             # ---------- ① 常态：截图+dHash（≈0.12s），画面没变就歇着 ----------
             pl = b.probe_light(_win)
             if not pl.get("ok"):
+                _err = pl.get("err", "")
+                if _err == "wechat not frontmost":
+                    # 微信不在前台 = 正常等待，不是故障：不记失败、不红字、不刷屏
+                    _win = None
+                    if (_front_hint == 0.0 or time.time() - _front_hint >= 15) and on_status:
+                        _front_hint = time.time()
+                        on_status("等待微信前台…（切回微信自动继续）")
+                    cycle += 1
+                    time.sleep(interval)
+                    continue
                 fail_cnt += 1
                 _win = None
                 if fail_cnt >= 3:
-                    # 只在首次达标时报一次，避免微信切走时每 4s 刷屏
+                    # 只在首次达标时报一次，避免持续失败时每 4s 刷屏
                     if fail_cnt == 3:
-                        _log(f"OCR 通道持续失败（微信未在前台？）：{pl.get('err', '')}")
+                        _log(f"OCR 通道持续失败（微信未在前台？）：{_err}")
                         if on_status:
-                            on_status(f"OCR 失效：{pl.get('err', '')}")
+                            on_status(f"OCR 失效：{_err}")
                     time.sleep(3.0)
                 cycle += 1
                 time.sleep(interval)
