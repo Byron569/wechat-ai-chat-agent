@@ -140,6 +140,9 @@ class WeChatBot:
             path=(ROOT / session_cfg["path"]) if session_cfg.get("path") else None,
             enabled=session_cfg.get("enabled", True),
         ) if session_cfg.get("enabled", True) else None
+        # 生成回复时只取最近 N 条进 prompt（防旧话题漂移）；切框是否用当前屏重建上下文
+        self._ctx_size = max(int(session_cfg.get("context_size", 6) or 6), 2)
+        self._reset_on_switch = bool(session_cfg.get("reset_on_switch", True))
         # 预热 JEV 阈值
         self.jev_thresholds = {
             "should_reply_min": jev_cfg.get("should_reply_min", 0.35),
@@ -199,6 +202,36 @@ class WeChatBot:
         return memory
 
     # ---------- 对外主入口 ----------
+    def reset_chat(self, nickname: str, msges: list) -> None:
+        """切框时用当前屏幕消息重建该会话上下文（防旧话题漂移，翻旧账）。
+
+        msges: ocr 行 [(文本, x中心), ...]（自上而下）。左<0.45=对方、右>0.55=自己、
+        居中行（转账/系统提示）忽略。由 engine 在切框轮调用。
+        """
+        if not self.session or not self._reset_on_switch:
+            return
+        from core.session import ROLE_OTHER, ROLE_SELF
+        rows: list[tuple[str, str]] = []
+        for item in msges or []:
+            if not isinstance(item, (tuple, list)) or len(item) < 2:
+                continue
+            t, xc = item[0], item[1]
+            t = (str(t) or "").strip()
+            if not t:
+                continue
+            try:
+                xf = float(xc)
+            except (TypeError, ValueError):
+                continue
+            if xf > 0.55:
+                rows.append((ROLE_SELF, t))
+            elif xf < 0.45:
+                rows.append((ROLE_OTHER, t))
+            # 居中带（0.45~0.55）忽略：转账/红包/系统提示不是上下文消息
+        if rows:
+            self.session.rebuild(nickname, rows)
+            self.session.save()
+
     def handle_message(self, msg: dict) -> str | None:
         """输入消息 dict，返回要发送的回复文本；返回 None 表示不回复。
 
@@ -403,10 +436,11 @@ class WeChatBot:
         examples = self.memory.format_examples(text) if self.memory else ""
 
         # 注入最近对话上下文：优先用会话记忆（带"对方/我"标记，跨轮次不丢上文），
-        # 会话为空（如模拟器/首次）时退回调用方传入的 context
+        # 会话为空（如模拟器/首次）时退回调用方传入的 context。
+        # 只取最近 _ctx_size 条，防旧话题漂移污染本条回复
         context_lines = ""
         if self.session and self.session.has(nickname):
-            hist = self.session.recent(nickname)
+            hist = self.session.recent(nickname, n=self._ctx_size)
             if hist:
                 lines = [f"{i}. {m}" for i, m in enumerate(hist, 1)]
                 context_lines = "最近这段对话（按先后顺序，最后一条是对方刚发的）：\n" + "\n".join(lines) + "\n\n"

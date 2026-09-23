@@ -80,6 +80,20 @@ class SessionMemory:
     def push_self(self, sender: str, text: str) -> None:
         self.push(sender, ROLE_SELF, text)
 
+    def rebuild(self, sender: str, items: list[tuple[str, str]]) -> None:
+        """用给定的消息重建某会话的上下文（切框时以"当前屏幕消息"替换旧历史，不翻旧账）。
+
+        items: [(ROLE_OTHER|ROLE_SELF, text), ...]（旧在前新在后）
+        """
+        if not self.enabled:
+            return
+        dq = deque(maxlen=self.max_history)
+        for role, text in items:
+            text = (text or "").strip()
+            if role in (ROLE_OTHER, ROLE_SELF) and text:
+                dq.append((role, text))
+        self._sessions[sender] = dq
+
     # ---------- 读取 ----------
     def recent(self, sender: str, n: int | None = None) -> list[str]:
         """返回最近 n 条（默认全部）"角色: 内容" 文本，旧在前新在后。"""

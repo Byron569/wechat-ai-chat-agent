@@ -333,6 +333,13 @@ def watch_loop(bot, interval: float = 1.0, stop: threading.Event | None = None,
                 last_msges = msges or []   # 以本帧为基线（切框轮必有 msges）
                 last_hash = new_hash
                 ping_done = False   # 新窗口允许保活
+                # 切框重置该会话上下文：以当前屏幕消息重建（防旧话题漂移，不翻旧账）
+                _reset = getattr(bot, "reset_chat", None)
+                if _reset:
+                    try:
+                        _reset(name, msges)
+                    except Exception as e:
+                        _log(f"重置会话上下文失败（{name}）：{e}")
                 # 打开对话自动补回：最后一条是对方(左侧) → 直接回（白名单/黑名单过滤）
                 if catchup_enabled and _chat_allowed(name, catchup_whitelist, catchup_blacklist):
                     catch_text = _catchup_target(msges)
