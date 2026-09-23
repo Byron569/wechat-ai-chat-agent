@@ -25,6 +25,49 @@ def _first_env(*names: str) -> str | None:
     return None
 
 
+DEFAULT_EMOTIONS = ("开心", "愤怒", "悲伤", "恐惧", "惊讶", "厌恶")
+EMOTION_EN = {
+    "happy": "开心", "joy": "开心", "joyful": "开心", "glad": "开心",
+    "anger": "愤怒", "angry": "愤怒", "mad": "愤怒",
+    "sad": "悲伤", "sadness": "悲伤", "down": "悲伤", "unhappy": "悲伤",
+    "fear": "恐惧", "fearful": "恐惧", "scared": "恐惧", "afraid": "恐惧",
+    "surprise": "惊讶", "surprised": "惊讶", "shocked": "惊讶",
+    "disgust": "厌恶", "disgusted": "厌恶", "displeased": "厌恶",
+}
+
+
+def _match_emotion(v, default: str = "开心") -> str:
+    """把模型输出的情绪（中文/英文/旧数字协议）归一成六类之一。"""
+    s = "".join(str(v or "").split()).strip("/'\"")
+    for cand in DEFAULT_EMOTIONS:
+        if cand in s:
+            return cand
+    low = s.lower()
+    for en, zh in EMOTION_EN.items():
+        if en in low:
+            return zh
+    # 兼容旧的 1~5 数字协议：1-2=愤怒 3=开心 4-5=开心（粗略但不崩）
+    if s.isdigit():
+        n = int(s)
+        return "开心" if n >= 3 else "愤怒"
+    return default
+
+
+def _emotion_choice_q(instructions: str) -> dict:
+    return {
+        "type": "choice",
+        "instructions": instructions,
+        "criteria": {
+            "开心": "高兴、愉悦、轻松、满意",
+            "愤怒": "生气、发火、不满、不爽",
+            "悲伤": "难过、低落、沮丧、失望",
+            "恐惧": "担心、害怕、紧张",
+            "惊讶": "意外、没想到、震惊",
+            "厌恶": "嫌弃、反感、看不惯",
+        },
+    }
+
+
 def default_questions() -> dict:
     """把微信消息的决策点全部塞进一次调用。问题 id 即返回结果的 key。"""
     return {
@@ -65,28 +108,8 @@ def default_questions() -> dict:
                 "nonsense": "乱码、纯表情、测试消息、无意义内容",
             },
         },
-        "emotion": {
-            "type": "score",
-            "instructions": "对方当前的【情绪状态】在 1 到 5 分之间打几分？",
-            "criteria": [
-                "很不满、生气、急躁",
-                "有点不满或催促",
-                "平静、中性",
-                "比较友好、轻松",
-                "非常热情、开心、熟络",
-            ],
-        },
-        "my_emotion": {
-            "type": "score",
-            "instructions": "你是被代替回复的真人本人，读完对方这条消息后你【自己的真实情绪反应】在 1 到 5 分之间打几分？（对方骂你你会烦、对方夸你你会开心、平时中性）",
-            "criteria": [
-                "很生气、想发作",
-                "有点不耐烦、糟心",
-                "平静、中性",
-                "比较愉悦、轻松",
-                "很开心、心情大好",
-            ],
-        },
+        "emotion": _emotion_choice_q("对方当前的【情绪】属于以下哪一类？（既是情绪也带态度）"),
+        "my_emotion": _emotion_choice_q("你是被代替回复的真人本人，读完对方这条消息后你【自己的情绪】是哪一类？（对方骂你你愤怒/厌恶，对方夸你你开心，平常你中性时可选开心）"),
         "urgency": {
             "type": "score",
             "instructions": "这件事的【紧急程度】在 1 到 5 分之间打几分？",
@@ -155,11 +178,11 @@ class OllamaJevClient:
             "should_reply(0~1 是否该真人回复)、is_ad(0~1 是否广告/营销/诈骗)、"
             "needs_human(0~1 是否必须真人处理，涉及钱/隐私/承诺/紧急)、"
             "intent(chat|question|request|complaint|gratitude|nonsense，对方真实意图)、"
-            "emotion(1~5，1=很生气 5=很开心，对方情绪)、"
-            "my_emotion(1~5，1=很生气想发作 5=很开心，被代替回复的真人读完这条后的情绪反应)、"
+            "emotion(开心|愤怒|悲伤|恐惧|惊讶|厌恶，对方情绪)、"
+            "my_emotion(开心|愤怒|悲伤|恐惧|惊讶|厌恶，被代替回复的真人读完这条后的情绪)、"
             "urgency(1~5，1=不急 5=非常急)。"
             '示例：{"should_reply":0.9,"is_ad":0.02,"needs_human":0.1,'
-            '"intent":"question","emotion":3,"my_emotion":3,"urgency":2}'
+            '"intent":"complaint","emotion":"愤怒","my_emotion":"厌恶","urgency":2}'
         )
         user_msg = f"最近对话：{ctx or '（无）'}\n最新消息：{latest}"
         payload = {
@@ -206,7 +229,7 @@ class OllamaJevClient:
             "is_ad": {"type": "noul", "noul": _f("is_ad", 0.0)},
             "needs_human": {"type": "noul", "noul": _f("needs_human", 0.0)},
             "intent": {"type": "choice", "choice": intent},
-            "emotion": {"type": "score", "score": _f("emotion", 3.0)},
-            "my_emotion": {"type": "score", "score": _f("my_emotion", 3.0)},
+            "emotion": {"type": "choice", "choice": _match_emotion(data.get("emotion"))},
+            "my_emotion": {"type": "choice", "choice": _match_emotion(data.get("my_emotion"))},
             "urgency": {"type": "score", "score": _f("urgency", 2.0)},
         }
