@@ -188,15 +188,20 @@ def watch_loop(bot, interval: float = 1.0, stop: threading.Event | None = None,
     last_msges = None      # 上次见到的消息区行集（用于提取本次新增的多条）
 
     def _read3_from(msges: list) -> list[str]:
-        """从 scan 的 msges 取最近 3 条，作为 JEV 判断与回复的上下文（同帧复用，不二次扫描）。"""
-        return [t for t, _ in (msges or [])][-3:]
+        """从 scan 的 msges 取最近 3 条，作为 JEV 判断与回复的上下文（同帧复用，不二次扫描）。
+
+        过滤掉时间戳/空行（OCR 常把时间当文本读出，不该进决策链与风格样本）。
+        """
+        clean = [t for t, _ in (msges or [])
+                 if (t or "").strip() and not _looks_timestamp(t)]
+        return clean[-3:]
 
     def _read3_extra(b: WeChatBridge) -> list[str]:
         """兜底专用：本帧没 OCR 到文本时补一次精读拿上下文（仅在补处理/保活要走）。"""
         try:
             s = b.scan(_win, scale=ocr_scale)
             if s.get("ok"):
-                return [t for t, _ in (s.get("msges") or [])][-3:]
+                return _read3_from(s.get("msges") or [])
         except Exception:
             pass
         return []
@@ -234,7 +239,9 @@ def watch_loop(bot, interval: float = 1.0, stop: threading.Event | None = None,
         # 败龙(你小号)的发言当作"我"真实语气样本；前一条对方话当上下文。
         # 只有当值守会话名就是败龙时才采集（其它人的话不学。）
         try:
-            prev = next((t for t in reversed(context[:-1]) if not _same_text(t, cand, 0.7)), None)
+            prev = next((t for t in reversed(context[:-1])
+                         if (t or "").strip() and not _same_text(t, cand, 0.7)
+                         and not _looks_timestamp(t)), None)   # 时间戳行不进风格样本
             if bot.record_bailong(name, cand, prev):
                 _log(f"采集败龙风格：{prev[:22]} → 败龙：{cand[:22]}")
         except Exception:
@@ -289,9 +296,11 @@ def watch_loop(bot, interval: float = 1.0, stop: threading.Event | None = None,
                 fail_cnt += 1
                 _win = None
                 if fail_cnt >= 3:
-                    _log(f"OCR 通道持续失败（微信未在前台？）：{pl.get('err', '')}")
-                    if on_status:
-                        on_status(f"OCR 失效：{pl.get('err', '')}")
+                    # 只在首次达标时报一次，避免微信切走时每 4s 刷屏
+                    if fail_cnt == 3:
+                        _log(f"OCR 通道持续失败（微信未在前台？）：{pl.get('err', '')}")
+                        if on_status:
+                            on_status(f"OCR 失效：{pl.get('err', '')}")
                     time.sleep(3.0)
                 cycle += 1
                 time.sleep(interval)
@@ -323,6 +332,23 @@ def watch_loop(bot, interval: float = 1.0, stop: threading.Event | None = None,
 
             # ---------- 切框感知（仅在精读轮） ----------
             if name != last_name:
+                # Bug 修复：会话名 OCR 漂移闩——名字变了但消息区内容与上帧高度重合，
+                # 说明只是 OCR 把标题/会话名读花（如「占好座了快点来 杨佐笙」「玉科參」），
+                # 实际还是同一个对话：只更新名字，绝不重置状态/上下文。
+                if last_msges is not None:
+                    drifted = True
+                    for t, xc in (msges or [])[:5]:
+                        t = (t or "").strip()
+                        if not t or _looks_timestamp(t):
+                            continue
+                        if not any(_same_text(t, p, 0.75) for p, _ in last_msges[:5]):
+                            drifted = False
+                            break
+                    if drifted:
+                        last_name, last_signal = name, sig or last_signal
+                        cycle += 1
+                        time.sleep(interval)
+                        continue
                 if last_name is not None:
                     _log(f"已切换 → {name}（先适应，不回复历史）")
                     if on_status:

@@ -38,6 +38,30 @@ def have_screen_capture() -> bool:
         return False
 
 
+def wechat_frontmost() -> bool:
+    """微信主窗口是否在所有 on-screen 窗口最顶层。
+
+    截屏是"屏幕坐标区域"截图：微信被其它窗口遮挡/切到别的 App 时，
+    截到的是顶层窗口内容，会把浏览器/翻译页/网页当微信消息读进来（历史错发实锤）。
+    判定失败时返回 True（不拦截，保持原行为），避免失效侵入主循环。
+    """
+    try:
+        infos = Quartz.CGWindowListCopyWindowInfo(
+            Quartz.kCGWindowListOptionOnScreenOnly, Quartz.kCGNullWindowID)
+        for info in infos or []:   # CGWindowList 返回顺序：顶层在前
+            owner = info.get(Quartz.kCGWindowOwnerName, "") or ""
+            if not owner or owner == "Window Server":
+                continue
+            b = info.get(Quartz.kCGWindowBounds) or {}
+            w, h = float(b.get("Width", 0)), float(b.get("Height", 0))
+            if w < 200 or h < 200:   # 跳过菜单栏/角标/小浮窗
+                continue
+            return owner in ("微信", "WeChat")
+        return True
+    except Exception:
+        return True
+
+
 def _region_shot(x: int, y: int, w: int, h: int, path: str) -> bool:
     """截图屏幕区域（points），成功返回 True。"""
     try:
@@ -236,12 +260,15 @@ def probe_light(wx: tuple[int, int, int, int] | None = None) -> dict:
     返回 {ok, hash, win, msg}：hash 变化 = 画面有变，再叫 scan() 精读。
     这是值守主循环的默认节奏——把浪费的 OCR 挪到"变化时"。
     """
+    if not have_screen_capture():
+        return {"ok": False, "err": "no screen recording permission"}
+    # 微信被其它窗口遮挡/切到别的 App 时不截（截了也是别的窗口内容，会错读错发）
+    if not wechat_frontmost():
+        return {"ok": False, "err": "wechat not frontmost"}
     if wx is None:
         wx = _pick_window()
     if not wx:
         return {"ok": False, "err": "no wechat window"}
-    if not have_screen_capture():
-        return {"ok": False, "err": "no screen recording permission"}
     lay = layout(wx)
     if lay["msg"][2] < 50 or lay["msg"][3] < 50:
         return {"ok": False, "err": "window too small"}
