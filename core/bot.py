@@ -298,6 +298,7 @@ class WeChatBot:
                 "needs_human": {"noul": 0.0},
                 "urgency": {"score": 1.0},
                 "emotion": {"score": 3.0},
+                "my_emotion": {"score": 3.0},
                 "intent": {"choice": "chat"},
             }
 
@@ -449,6 +450,7 @@ class WeChatBot:
         nickname = msg.get("nickname") or msg.get("sender_id") or "unknown"
         intent = answers.get("intent", {}).get("choice", "chat")
         emotion = answers.get("emotion", {}).get("score", 3.0)
+        my_emotion = answers.get("my_emotion", {}).get("score", 3.0)
         urgency = answers.get("urgency", {}).get("score", 1.0)
         is_group = bool(msg.get("is_group", False))
 
@@ -480,7 +482,8 @@ class WeChatBot:
             f"{context_lines}"
             f"对方最新发来的微信消息：\n{text}\n\n"
             f"上下文：发送者={msg.get('nickname') or msg.get('sender_id', '未知')}，群聊={'是' if is_group else '否'}\n"
-            f"辅助判断：对方意图≈{INTENT_LABELS.get(intent, intent)}，情绪分 {emotion:.0f}/5，紧急度 {urgency:.0f}/5\n\n"
+            f"辅助判断：对方意图≈{INTENT_LABELS.get(intent, intent)}，对方情绪分 {emotion:.0f}/5，"
+            f"你现在的情绪分 {my_emotion:.0f}/5，紧急度 {urgency:.0f}/5\n\n"
             f"请按人设直接回复这条最新消息，只输出回复内容本身，不要任何解释。"
         )
         try:

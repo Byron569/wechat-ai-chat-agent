@@ -76,6 +76,17 @@ def default_questions() -> dict:
                 "非常热情、开心、熟络",
             ],
         },
+        "my_emotion": {
+            "type": "score",
+            "instructions": "你是被代替回复的真人本人，读完对方这条消息后你【自己的真实情绪反应】在 1 到 5 分之间打几分？（对方骂你你会烦、对方夸你你会开心、平时中性）",
+            "criteria": [
+                "很生气、想发作",
+                "有点不耐烦、糟心",
+                "平静、中性",
+                "比较愉悦、轻松",
+                "很开心、心情大好",
+            ],
+        },
         "urgency": {
             "type": "score",
             "instructions": "这件事的【紧急程度】在 1 到 5 分之间打几分？",
@@ -139,14 +150,16 @@ class OllamaJevClient:
             latest, recent = state, []
         ctx = "；".join(str(x)[:80] for x in recent[-3:])
         sys_prompt = (
-            "你是微信回复的决策器。结合最近对话与最新消息，一次输出以下 6 个判断的 JSON，"
+            "你是微信回复的决策器。结合最近对话与最新消息，一次输出以下 7 个判断的 JSON，"
             "不要任何其它文字。字段与取值："
             "should_reply(0~1 是否该真人回复)、is_ad(0~1 是否广告/营销/诈骗)、"
             "needs_human(0~1 是否必须真人处理，涉及钱/隐私/承诺/紧急)、"
             "intent(chat|question|request|complaint|gratitude|nonsense，对方真实意图)、"
-            "emotion(1~5，1=很生气 5=很开心)、urgency(1~5，1=不急 5=非常急)。"
+            "emotion(1~5，1=很生气 5=很开心，对方情绪)、"
+            "my_emotion(1~5，1=很生气想发作 5=很开心，被代替回复的真人读完这条后的情绪反应)、"
+            "urgency(1~5，1=不急 5=非常急)。"
             '示例：{"should_reply":0.9,"is_ad":0.02,"needs_human":0.1,'
-            '"intent":"question","emotion":3,"urgency":2}'
+            '"intent":"question","emotion":3,"my_emotion":3,"urgency":2}'
         )
         user_msg = f"最近对话：{ctx or '（无）'}\n最新消息：{latest}"
         payload = {
@@ -180,7 +193,7 @@ class OllamaJevClient:
                 v = float(v)
             except (TypeError, ValueError):
                 return default
-            if key in ("emotion", "urgency"):
+            if key in ("emotion", "my_emotion", "urgency"):
                 return max(1.0, min(5.0, v))
             return max(0.0, min(1.0, v))
 
@@ -194,5 +207,6 @@ class OllamaJevClient:
             "needs_human": {"type": "noul", "noul": _f("needs_human", 0.0)},
             "intent": {"type": "choice", "choice": intent},
             "emotion": {"type": "score", "score": _f("emotion", 3.0)},
+            "my_emotion": {"type": "score", "score": _f("my_emotion", 3.0)},
             "urgency": {"type": "score", "score": _f("urgency", 2.0)},
         }
